@@ -1,14 +1,31 @@
-# Standalone Mahony AHRS
+# Test Quad MahonyAHRS Library
 
-## Purpose
+This standalone repository provides the `MahonyAHRS` estimator. In the main firmware the same implementation is also available through the consolidated AHRS library.
 
-Original standalone Mahony AHRS implementation based directly on `MPU_SensorData`, retained for comparison and migration history.
+## Pin Map
 
-## Files
+Mahony does not use pins directly. It consumes IMU data:
 
-- `MahonyAHRS.h/.cpp`: Mahony quaternion update and Euler output.
+| Signal | ESP32 pin | Notes |
+| --- | ---: | --- |
+| SPI SCK | GPIO 5 | MPU-9250/MPU-6500 clock |
+| SPI MISO | GPIO 19 | MPU data to ESP32 |
+| SPI MOSI | GPIO 18 | ESP32 data to MPU |
+| MPU CS | GPIO 33 | Chip select passed to `MPU9250 imu(PIN_MPU_CS)` |
+| MPU INT | GPIO 27 | Optional data-ready interrupt; current firmware does not require it |
+| Motor FL | GPIO 25 | Front-left ESC signal |
+| Motor FR | GPIO 15 | Front-right ESC signal |
+| Motor RL | GPIO 14 | Rear-left ESC signal |
+| Motor RR | GPIO 32 | Rear-right ESC signal |
+| iBUS RX | GPIO 16 | FS-iA6B iBUS TX into ESP32 UART2 RX |
+| iBUS TX | GPIO 4 | Spare UART TX; avoids GPIO17 GPS conflict |
+| I2C SDA | GPIO 21 | BMP280 and VL53L4CX ToF bus |
+| I2C SCL | GPIO 22 | BMP280 and VL53L4CX ToF bus |
+| GPS RX | GPIO 13 | GPS TXD into ESP32 UART1 RX |
+| GPS TX | GPIO 17 | Optional GPS RXD from ESP32 UART1 TX |
 
-## Quick Start
+
+## Main INO Integration Example
 
 ```cpp
 #include "MahonyAHRS.h"
@@ -20,62 +37,15 @@ void setup() {
 }
 
 void loop() {
-    MPU_SensorData s{};
-    AttitudeEstimate att{};
-    mahony.update(s, 0.0025f, att);
+    MPU_SensorData s;
+    AttitudeEstimate att;
+    if (imu.readScaled(s)) {
+        mahony.update(s, 0.0025f, att);
+    }
 }
 ```
 
-## How It Fits Into The Flight Controller
 
-This library lives under `Submodules/MahonyAHRS` in the main `Test_Quad` firmware
-and is built as an Arduino library by adding `Submodules/` to the Arduino
-library search path. The main firmware includes it directly from
-`RC_FlightController.ino` or from another support module.
+## Why These Data Types
 
-The flight controller runs a 400 Hz control loop on ESP32, so this library
-should avoid heap allocation, long blocking calls, and unbounded Serial output
-inside flight-critical paths. Debug output should use `DebugConfig.h` macros
-where available so `VERBOSE_ON=0` builds can compile prints out.
-
-## Data Type Choices
-
-- `MPU_SensorData`: This version consumes the IMU driver's native scaled sample format.
-- `float kp/ki`: Filter correction gains are runtime-tunable continuous values.
-- Quaternion floats: Internal quaternion state is compact and efficient on ESP32.
-
-## Usage Guidance
-
-1. Initialize hardware-facing classes once during `setup()`.
-2. Keep update/read calls deterministic when used from a FreeRTOS task.
-3. Prefer explicit validity flags over sentinel numeric values.
-4. Keep units visible in field names, such as `_dps`, `_g`, `_uT`, `_m`, or `_us`.
-5. When adding telemetry fields, update both the packet struct and JSON serializer.
-
-## Example Build Integration
-
-```bash
-arduino-cli compile \
-  --fqbn esp32:esp32:esp32:UploadSpeed=921600,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=min_spiffs,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default \
-  --libraries ./Submodules \
-  .
-```
-
-For quiet flight builds:
-
-```bash
-arduino-cli compile ... --build-property compiler.cpp.extra_flags=-DVERBOSE_ON=0
-```
-
-
-## Integration Notes
-
-In the main flight-controller sketch, this library is included through Arduino's
-library search path. When this folder is converted to a git submodule, keep the
-folder name stable under `Submodules/` so includes such as `#include "..."`
-continue to resolve.
-
-Most examples below are intentionally small. On the real flight controller,
-objects are usually constructed globally, initialized once from `setup()`, and
-then called from FreeRTOS tasks at deterministic rates.
-
+The quaternion and correction integrals use `float` for speed on ESP32 and enough precision for flight angles. Gains are `float` so WiFi tuning can adjust them smoothly.
